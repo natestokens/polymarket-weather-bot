@@ -1,0 +1,390 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>rainmoneymaker — P&L Cards</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: #05060D;
+    font-family: 'Inter', sans-serif;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 40px 24px 60px;
+    gap: 32px;
+  }
+
+  /* ── Mode toggle ── */
+  .mode-toggle {
+    display: flex;
+    gap: 8px;
+  }
+  .toggle-btn {
+    background: #0F1119;
+    border: 1px solid #1E2433;
+    color: #4A5275;
+    padding: 7px 18px;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.7rem;
+    font-weight: 700;
+    cursor: pointer;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    transition: all 0.15s;
+  }
+  .toggle-btn.active { border-color: #2E5CFF; color: #2E5CFF; background: #0a0e1f; }
+
+  /* ── Grid ── */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, 380px);
+    gap: 24px;
+    justify-content: center;
+    max-width: 1200px;
+    width: 100%;
+  }
+
+  /* ── THE CARD ── */
+  .card {
+    width: 380px;
+    background: #2E5CFF;
+    border-radius: 24px;
+    padding: 30px 24px 24px;
+    position: relative;
+    overflow: hidden;
+
+    /* dot pattern */
+    background-image:
+      radial-gradient(circle, rgba(255,255,255,0.18) 1.2px, transparent 1.2px);
+    background-size: 22px 22px;
+    background-color: #2E5CFF;
+  }
+
+  /* ── Header: You won +X% ── */
+  .won-header {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 22px;
+  }
+
+  .check-circle {
+    width: 36px;
+    height: 36px;
+    background: #22C55E;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    box-shadow: 0 0 0 4px rgba(34,197,94,0.25);
+  }
+  .check-circle svg { width: 20px; height: 20px; }
+
+  .won-text {
+    font-size: 1.75rem;
+    font-weight: 900;
+    color: #ffffff;
+    letter-spacing: -0.02em;
+    line-height: 1;
+  }
+  .won-text .pct { color: #ffffff; }
+
+  /* ── White inner card ── */
+  .inner-card {
+    background: #ffffff;
+    border-radius: 16px;
+    overflow: hidden;
+    margin-bottom: 18px;
+  }
+
+  .inner-top {
+    padding: 16px 18px 14px;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .city-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.55rem;
+    font-weight: 800;
+    letter-spacing: 0.05em;
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+  .icon-nyc { background: #DBEAFE; color: #1D4ED8; }
+  .icon-chi { background: #DCFCE7; color: #15803D; }
+  .icon-mia { background: #FEE2E2; color: #B91C1C; }
+
+  .market-title {
+    font-size: 0.95rem;
+    font-weight: 800;
+    color: #0F172A;
+    line-height: 1.3;
+    letter-spacing: -0.01em;
+  }
+  .market-sub {
+    font-size: 0.72rem;
+    color: #94A3B8;
+    font-weight: 500;
+    margin-top: 3px;
+  }
+
+  .dashed { border-top: 1.5px dashed #E2E8F0; }
+
+  .pnl-center {
+    padding: 16px 18px;
+    text-align: center;
+  }
+
+  .pnl-dollar {
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: #16A34A;
+    letter-spacing: -0.03em;
+    line-height: 1;
+  }
+
+  .inner-bottom {
+    padding: 13px 18px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+  }
+
+  .stat-label {
+    font-size: 0.72rem;
+    color: #64748B;
+    font-weight: 600;
+  }
+  .stat-value {
+    font-size: 0.72rem;
+    font-weight: 800;
+    color: #0F172A;
+    margin-top: 2px;
+  }
+  .stat-value.green { color: #16A34A; }
+
+  /* ── Footer branding ── */
+  .card-footer {
+    text-align: center;
+  }
+  .footer-brand {
+    font-size: 1rem;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: -0.01em;
+  }
+  .footer-sub {
+    font-size: 0.65rem;
+    font-weight: 600;
+    color: rgba(255,255,255,0.55);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    margin-top: 2px;
+  }
+
+  /* ── Single view nav ── */
+  .single-wrap {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+  }
+  .nav-row {
+    display: flex;
+    align-items: center;
+    gap: 20px;
+  }
+  .nav-btn {
+    background: #0F1119;
+    border: 1px solid #1E2433;
+    color: #8892B4;
+    padding: 9px 24px;
+    border-radius: 8px;
+    font-family: 'Inter', sans-serif;
+    font-size: 0.78rem;
+    font-weight: 700;
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .nav-btn:hover { background: #161b2e; color: #E8EAFF; }
+  .nav-counter { font-size: 0.72rem; color: #3A4060; font-weight: 600; min-width: 60px; text-align: center; }
+
+  #gridView  { display: grid; }
+  #singleView { display: none; }
+</style>
+</head>
+<body>
+
+<div class="mode-toggle">
+  <button class="toggle-btn active" onclick="setMode('grid')"   id="btnGrid">Grid</button>
+  <button class="toggle-btn"        onclick="setMode('single')" id="btnSingle">Single</button>
+  <button class="toggle-btn" onclick="saveAllJpgs()" id="btnSave" style="border-color:#22C55E;color:#22C55E;">⬇ Save All JPGs</button>
+</div>
+<div id="saveStatus" style="font-size:0.7rem;color:#22C55E;font-weight:600;letter-spacing:0.08em;min-height:20px;"></div>
+
+<div class="grid" id="gridView"></div>
+
+<div class="single-wrap" id="singleView">
+  <div id="singleCard"></div>
+  <div class="nav-row">
+    <button class="nav-btn" onclick="prev()">← prev</button>
+    <span class="nav-counter" id="navCounter"></span>
+    <button class="nav-btn" onclick="next()">next →</button>
+  </div>
+</div>
+
+<script>
+const WINS = [
+  { pnl:35.76, bracket:"59°F or below",  city:"CHI", dir:"YES", stake:55, date:"May 21, 2026" },
+  { pnl:27.62, bracket:"62–63°F",         city:"NYC", dir:"NO",  stake:20, date:"May 11, 2026" },
+  { pnl:24.52, bracket:"88–89°F",         city:"MIA", dir:"NO",  stake:40, date:"May 17, 2026" },
+  { pnl:18.33, bracket:"66–67°F",         city:"NYC", dir:"NO",  stake:15, date:"May 15, 2026" },
+  { pnl: 7.03, bracket:"64–65°F",         city:"NYC", dir:"NO",  stake:20, date:"May 11, 2026" },
+  { pnl: 5.62, bracket:"68–69°F",         city:"NYC", dir:"NO",  stake:10, date:"May 15, 2026" },
+  { pnl: 4.75, bracket:"74–75°F",         city:"NYC", dir:"NO",  stake:19, date:"May 16, 2026" },
+  { pnl: 4.38, bracket:"90–91°F",         city:"NYC", dir:"NO",  stake:23, date:"May 17, 2026" },
+  { pnl: 2.66, bracket:"66°F or higher",  city:"CHI", dir:"NO",  stake:3,  date:"May 22, 2026" },
+  { pnl: 0.27, bracket:"66°F or higher",  city:"CHI", dir:"NO",  stake:1,  date:"May 22, 2026" },
+];
+
+const CITY_NAMES = { NYC:"New York City", CHI:"Chicago", MIA:"Miami" };
+
+const CHECK_SVG = `<svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+  <polyline points="20 6 9 17 4 12"></polyline></svg>`;
+
+function roi(t) {
+  return ((t.pnl / t.stake) * 100).toFixed(1);
+}
+
+function buildCard(t) {
+  const iconClass = `icon-${t.city.toLowerCase()}`;
+  const roiStr = roi(t);
+  return `
+  <div class="card">
+    <div class="won-header">
+      <div class="check-circle">${CHECK_SVG}</div>
+      <div class="won-text">You won <span class="pct">+${roiStr}%</span></div>
+    </div>
+
+    <div class="inner-card">
+      <div class="inner-top">
+        <div class="city-icon ${iconClass}">${t.city}</div>
+        <div>
+          <div class="market-title">Highest Temp — ${t.bracket}</div>
+          <div class="market-sub">${CITY_NAMES[t.city]} · ${t.date}</div>
+        </div>
+      </div>
+
+      <div class="dashed"></div>
+
+      <div class="pnl-center">
+        <div class="pnl-dollar">+$${t.pnl.toFixed(2)}</div>
+      </div>
+
+      <div class="dashed"></div>
+
+      <div class="inner-bottom">
+        <div>
+          <div class="stat-label">Staked</div>
+          <div class="stat-value">$${t.stake}.00</div>
+        </div>
+        <div style="text-align:right">
+          <div class="stat-label">Won</div>
+          <div class="stat-value green">+$${t.pnl.toFixed(2)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="card-footer">
+      <div class="footer-brand">rainmoneymaker</div>
+      <div class="footer-sub">Weather Trading Bot · Polymarket</div>
+    </div>
+  </div>`;
+}
+
+// render grid
+const grid = document.getElementById('gridView');
+WINS.forEach(t => { grid.innerHTML += buildCard(t); });
+
+// single view
+let idx = 0;
+function renderSingle() {
+  document.getElementById('singleCard').innerHTML = buildCard(WINS[idx]);
+  document.getElementById('navCounter').textContent = `${idx+1} / ${WINS.length}`;
+}
+function next() { idx = (idx+1) % WINS.length; renderSingle(); }
+function prev() { idx = (idx-1+WINS.length) % WINS.length; renderSingle(); }
+renderSingle();
+
+function setMode(m) {
+  document.getElementById('gridView').style.display   = m==='grid'   ? 'grid' : 'none';
+  document.getElementById('singleView').style.display = m==='single' ? 'flex' : 'none';
+  document.getElementById('btnGrid').classList.toggle('active', m==='grid');
+  document.getElementById('btnSingle').classList.toggle('active', m==='single');
+}
+
+async function saveAllJpgs() {
+  const btn = document.getElementById('btnSave');
+  const status = document.getElementById('saveStatus');
+  btn.disabled = true;
+  btn.textContent = 'Saving...';
+
+  // Render each card into a temp off-screen container
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'position:fixed;top:-9999px;left:-9999px;';
+  document.body.appendChild(wrap);
+
+  for (let i = 0; i < WINS.length; i++) {
+    const t = WINS[i];
+    status.textContent = `Saving ${i+1} / ${WINS.length} — ${t.city} ${t.bracket}`;
+
+    wrap.innerHTML = buildCard(t);
+    const card = wrap.firstElementChild;
+
+    // Wait for fonts/images
+    await new Promise(r => setTimeout(r, 300));
+
+    const canvas = await html2canvas(card, {
+      scale: 3,          // 3× for crisp retina quality
+      useCORS: true,
+      backgroundColor: null,
+      logging: false,
+    });
+
+    // Convert to JPG and trigger download
+    const link = document.createElement('a');
+    const cityName = { NYC:'new-york', CHI:'chicago', MIA:'miami' }[t.city] || t.city.toLowerCase();
+    const dateSlug = t.date.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+    const pnlSlug  = t.pnl.toFixed(2).replace('.', '-');
+    link.download = `rmm-${String(i+1).padStart(2,'0')}-${cityName}-${pnlSlug}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+
+    // Small delay between downloads so browser doesn't block
+    await new Promise(r => setTimeout(r, 500));
+  }
+
+  document.body.removeChild(wrap);
+  btn.disabled = false;
+  btn.textContent = '⬇ Save All JPGs';
+  status.textContent = `✓ ${WINS.length} PNGs saved — check your Downloads folder`;
+}
+</script>
+</body>
+</html>

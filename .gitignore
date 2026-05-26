@@ -1,0 +1,25 @@
+# Mac
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Claude session files
+.claude/
+
+# Word docs / personal notes
+*.docx
+RESEARCH.md
+make_explainer.py
+
+# Downloaded PNG cards folder
+pnl-cards/
+weather pnl cards/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Env / secrets (just in case)
+.env
+*.key
