@@ -163,6 +163,8 @@
   .city-nyc  { background: #1e3a5f; color: #38bdf8; }
   .city-chi  { background: #1a3a2a; color: #4ade80; }
   .city-mia  { background: #3a1e1e; color: #f87171; }
+  .city-tyo  { background: #2a1a3a; color: #c084fc; }
+  .city-sin  { background: #2a2a0a; color: #facc15; }
 
   .dir-yes { color: #4ade80; font-weight: 700; }
   .dir-no  { color: #f87171; font-weight: 700; }
@@ -208,19 +210,19 @@
 <div class="stats-grid">
   <div class="stat-card">
     <div class="stat-label">Total P&amp;L</div>
-    <div class="stat-value green">+$72.94</div>
+    <div class="stat-value green">+$77.01</div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Win Rate</div>
-    <div class="stat-value yellow">58.8%</div>
+    <div class="stat-value yellow">60.9%</div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Signals</div>
-    <div class="stat-value white">17</div>
+    <div class="stat-value white">23</div>
   </div>
   <div class="stat-card">
     <div class="stat-label">Total Staked</div>
-    <div class="stat-value blue">$264</div>
+    <div class="stat-value blue">$279</div>
   </div>
   <div class="stat-card">
     <div class="stat-label">ROI</div>
@@ -257,33 +259,39 @@
   </table>
 </div>
 
-<div class="footer">Resolution source: Iowa State ASOS / Wunderground &nbsp;·&nbsp; Ensemble: ECMWF IFS + AIFS, NCEP GEFS, ICON (173 members) &nbsp;·&nbsp; Bias correction: −1.4°F (NYC)</div>
+<div class="footer">Resolution source: Iowa State ASOS / Polymarket &nbsp;·&nbsp; Ensemble: ECMWF IFS + AIFS, NCEP GEFS, ICON (173 members) &nbsp;·&nbsp; Bias corrections: NYC +1.4°F · MIA −2.2°F · CHI +1.4°F</div>
 
 <script>
 const trades = [
-  { date:"May 11", city:"NYC", bracket:"62-63°F", dir:"NO", size:20, mkt:58.0, edge:-41.8, actual:61, result:"WIN", pnl:27.62, cum:27.62 },
-  { date:"May 11", city:"NYC", bracket:"64-65°F", dir:"NO", size:20, mkt:26.0, edge:-19.6, actual:61, result:"WIN", pnl:7.03, cum:34.65 },
-  { date:"May 15", city:"NYC", bracket:"66-67°F", dir:"NO", size:15, mkt:55.0, edge:-34.2, actual:65, result:"WIN", pnl:18.33, cum:52.98 },
-  { date:"May 15", city:"NYC", bracket:"68-69°F", dir:"NO", size:10, mkt:36.0, edge:-25.6, actual:65, result:"WIN", pnl:5.62, cum:58.60 },
-  { date:"May 16", city:"NYC", bracket:"76-77°F", dir:"NO", size:23, mkt:29.0, edge:-19.8, actual:77, result:"LOSS", pnl:-23.00, cum:35.60 },
-  { date:"May 16", city:"NYC", bracket:"74-75°F", dir:"NO", size:19, mkt:20.0, edge:-16.5, actual:77, result:"WIN", pnl:4.75, cum:40.35 },
-  { date:"May 16", city:"NYC", bracket:"80-81°F", dir:"YES", size:1, mkt:9.4, edge:5.1, actual:77, result:"LOSS", pnl:-1.00, cum:39.35 },
-  { date:"May 17", city:"NYC", bracket:"90-91°F", dir:"NO", size:23, mkt:16.0, edge:-8.2, actual:89, result:"WIN", pnl:4.38, cum:43.73 },
-  { date:"May 17", city:"MIA", bracket:"88-89°F", dir:"NO", size:40, mkt:38.0, edge:-34.5, actual:86, result:"WIN", pnl:24.52, cum:68.25 },
-  { date:"May 20", city:"NYC", bracket:"94-95°F", dir:"NO", size:10, mkt:29.0, edge:-25.1, actual:95, result:"LOSS", pnl:-10.00, cum:58.25 },
-  { date:"May 20", city:"MIA", bracket:"88-89°F", dir:"NO", size:10, mkt:49.0, edge:-39.3, actual:88, result:"LOSS", pnl:-10.00, cum:48.25 },
-  { date:"May 21", city:"NYC", bracket:"66-67°F", dir:"NO", size:5, mkt:93.7, edge:-86.8, actual:66, result:"LOSS", pnl:-5.00, cum:43.25 },
-  { date:"May 21", city:"CHI", bracket:"59°F or below", dir:"YES", size:55, mkt:60.6, edge:15.7, actual:58, result:"WIN", pnl:35.76, cum:79.01 },
-  { date:"May 21", city:"MIA", bracket:"90-91°F", dir:"YES", size:4, mkt:13.0, edge:-13.0, actual:88, result:"LOSS", pnl:-4.00, cum:75.01 },
-  { date:"May 22", city:"CHI", bracket:"66°F or higher", dir:"NO", size:3, mkt:47.0, edge:-27.3, actual:65, result:"WIN", pnl:2.66, cum:77.67 },
-  { date:"May 22", city:"NYC", bracket:"68-69°F", dir:"NO", size:5, mkt:20.0, edge:-17.7, actual:68, result:"LOSS", pnl:-5.00, cum:72.67 },
-  { date:"May 22", city:"CHI", bracket:"66°F or higher", dir:"NO", size:1, mkt:21.5, edge:21.3, actual:65, result:"WIN", pnl:0.27, cum:72.94 },
+  { date:"May 11", city:"NYC", bracket:"62-63°F",        dir:"NO",  size:20, mkt:58.0, edge:-41.8, actual:"61°F",  result:"WIN",  pnl:27.62, cum:27.62 },
+  { date:"May 11", city:"NYC", bracket:"64-65°F",        dir:"NO",  size:20, mkt:26.0, edge:-19.6, actual:"61°F",  result:"WIN",  pnl:7.03,  cum:34.65 },
+  { date:"May 15", city:"NYC", bracket:"66-67°F",        dir:"NO",  size:15, mkt:55.0, edge:-34.2, actual:"65°F",  result:"WIN",  pnl:18.33, cum:52.98 },
+  { date:"May 15", city:"NYC", bracket:"68-69°F",        dir:"NO",  size:10, mkt:36.0, edge:-25.6, actual:"65°F",  result:"WIN",  pnl:5.62,  cum:58.60 },
+  { date:"May 16", city:"NYC", bracket:"76-77°F",        dir:"NO",  size:23, mkt:29.0, edge:-19.8, actual:"77°F",  result:"LOSS", pnl:-23.00,cum:35.60 },
+  { date:"May 16", city:"NYC", bracket:"74-75°F",        dir:"NO",  size:19, mkt:20.0, edge:-16.5, actual:"77°F",  result:"WIN",  pnl:4.75,  cum:40.35 },
+  { date:"May 16", city:"NYC", bracket:"80-81°F",        dir:"YES", size:1,  mkt:9.4,  edge:5.1,   actual:"77°F",  result:"LOSS", pnl:-1.00, cum:39.35 },
+  { date:"May 17", city:"NYC", bracket:"90-91°F",        dir:"NO",  size:23, mkt:16.0, edge:-8.2,  actual:"89°F",  result:"WIN",  pnl:4.38,  cum:43.73 },
+  { date:"May 17", city:"MIA", bracket:"88-89°F",        dir:"NO",  size:40, mkt:38.0, edge:-34.5, actual:"86°F",  result:"WIN",  pnl:24.52, cum:68.25 },
+  { date:"May 20", city:"NYC", bracket:"94-95°F",        dir:"NO",  size:10, mkt:29.0, edge:-25.1, actual:"95°F",  result:"LOSS", pnl:-10.00,cum:58.25 },
+  { date:"May 20", city:"MIA", bracket:"88-89°F",        dir:"NO",  size:10, mkt:49.0, edge:-39.3, actual:"88°F",  result:"LOSS", pnl:-10.00,cum:48.25 },
+  { date:"May 21", city:"NYC", bracket:"66-67°F",        dir:"NO",  size:5,  mkt:93.7, edge:-86.8, actual:"66°F",  result:"LOSS", pnl:-5.00, cum:43.25 },
+  { date:"May 21", city:"CHI", bracket:"59°F or below",  dir:"YES", size:55, mkt:60.6, edge:15.7,  actual:"58°F",  result:"WIN",  pnl:35.76, cum:79.01 },
+  { date:"May 21", city:"MIA", bracket:"90-91°F",        dir:"YES", size:4,  mkt:13.0, edge:-13.0, actual:"88°F",  result:"LOSS", pnl:-4.00, cum:75.01 },
+  { date:"May 22", city:"CHI", bracket:"66°F or higher", dir:"NO",  size:3,  mkt:47.0, edge:-27.3, actual:"65°F",  result:"WIN",  pnl:2.66,  cum:77.67 },
+  { date:"May 22", city:"NYC", bracket:"68-69°F",        dir:"NO",  size:5,  mkt:20.0, edge:-17.7, actual:"68°F",  result:"LOSS", pnl:-5.00, cum:72.67 },
+  { date:"May 22", city:"CHI", bracket:"66°F or higher", dir:"NO",  size:1,  mkt:21.5, edge:21.3,  actual:"65°F",  result:"WIN",  pnl:0.27,  cum:72.94 },
+  { date:"May 25", city:"NYC", bracket:"70°F or higher", dir:"NO",  size:1,  mkt:96.0, edge:-18.5, actual:"75°F",  result:"LOSS", pnl:-1.00, cum:71.94 },
+  { date:"May 25", city:"MIA", bracket:"90-91°F",        dir:"NO",  size:1,  mkt:18.0, edge:-12.8, actual:"87°F",  result:"WIN",  pnl:0.22,  cum:72.16 },
+  { date:"May 25", city:"MIA", bracket:"86-87°F",        dir:"YES", size:1,  mkt:18.0, edge:1.1,   actual:"87°F",  result:"WIN",  pnl:4.56,  cum:76.72 },
+  { date:"May 26", city:"NYC", bracket:"82-83°F",        dir:"NO",  size:8,  mkt:18.0, edge:-12.5, actual:"80°F",  result:"WIN",  pnl:1.76,  cum:78.48 },
+  { date:"May 27", city:"TYO", bracket:"28°C",           dir:"NO",  size:2,  mkt:21.0, edge:-21.0, actual:"27°C",  result:"WIN",  pnl:0.53,  cum:79.01 },
+  { date:"May 27", city:"SIN", bracket:"33°C",           dir:"NO",  size:2,  mkt:33.0, edge:-32.4, actual:"33°C",  result:"LOSS", pnl:-2.00, cum:77.01 },
 ];
 
 // Render table
 const body = document.getElementById('tradeBody');
 trades.forEach(t => {
-  const cityClass = { NYC:'city-nyc', CHI:'city-chi', MIA:'city-mia' }[t.city] || 'city-nyc';
+  const cityClass = { NYC:'city-nyc', CHI:'city-chi', MIA:'city-mia', TYO:'city-tyo', SIN:'city-sin' }[t.city] || 'city-nyc';
   const isWin = t.result === 'WIN';
   const edgeStr = (t.edge >= 0 ? '+' : '') + t.edge.toFixed(1) + 'pp';
   body.innerHTML += `
@@ -295,7 +303,7 @@ trades.forEach(t => {
       <td>$${t.size}</td>
       <td>${t.mkt.toFixed(1)}¢</td>
       <td class="edge-col">${edgeStr}</td>
-      <td>${t.actual}°F</td>
+      <td>${t.actual}</td>
       <td><span class="badge ${isWin ? 'badge-win' : 'badge-loss'}">${t.result}</span></td>
       <td class="${t.pnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}</td>
       <td class="${t.cum >= 0 ? 'pnl-pos' : 'pnl-neg'}">${t.cum >= 0 ? '+' : ''}$${t.cum.toFixed(2)}</td>
@@ -317,14 +325,14 @@ const z = cy(0);
 svg.innerHTML += `<line x1="${pad.l}" y1="${z}" x2="${W - pad.r}" y2="${z}" stroke="#1e2a3a" stroke-width="1" stroke-dasharray="4,4"/>`;
 svg.innerHTML += `<text x="${W - pad.r + 2}" y="${z + 4}" font-size="9" fill="#334155">$0</text>`;
 
+// Gradient def
+svg.innerHTML += `<defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#4ade80" stop-opacity="0"/></linearGradient></defs>`;
+
 // Fill area
 let fillPath = `M ${cx(0)} ${cy(0)}`;
 pts.forEach((p, i) => { if (i > 0) fillPath += ` L ${cx(i)} ${cy(p.y)}`; });
 fillPath += ` L ${cx(n - 1)} ${H - pad.b} L ${cx(0)} ${H - pad.b} Z`;
 svg.innerHTML += `<path d="${fillPath}" fill="url(#grad)" opacity="0.35"/>`;
-
-// Gradient
-svg.innerHTML += `<defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="#4ade80"/><stop offset="100%" stop-color="#4ade80" stop-opacity="0"/></linearGradient></defs>`;
 
 // Line
 let linePath = `M ${cx(0)} ${cy(0)}`;
@@ -339,10 +347,10 @@ trades.forEach((t, i) => {
 
 // Final P&L label
 const last = pts[pts.length - 1];
-svg.innerHTML += `<text x="${cx(n-1) - 2}" y="${cy(last.y) - 8}" font-size="11" fill="#4ade80" text-anchor="end" font-weight="bold">+$72.94</text>`;
+svg.innerHTML += `<text x="${cx(n-1) - 2}" y="${cy(last.y) - 8}" font-size="11" fill="#4ade80" text-anchor="end" font-weight="bold">+$77.01</text>`;
 
 // X-axis dates
-const labels = ['', 'May 11','','May 15','','May 16','','','May 17','','May 20','','May 21','','','May 22','',''];
+const labels = ['','May 11','','May 15','','May 16','','','May 17','','May 20','','May 21','','','May 22','','','May 25','','','May 26','May 27',''];
 labels.forEach((l, i) => {
   if (l) svg.innerHTML += `<text x="${cx(i)}" y="${H - 8}" font-size="9" fill="#475569" text-anchor="middle">${l}</text>`;
 });

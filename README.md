@@ -18,13 +18,13 @@ Built live on YouTube by [@rainmoneymaker](https://polymarket.com/@rainmoneymake
 
 ---
 
-## Results (as of May 2026)
+## Results (as of May 27, 2026)
 
 | Metric | Value |
 |---|---|
-| Total P&L | +$72.94 |
-| Win Rate | 58.8% (10/17) |
-| Total Staked | $264 |
+| Total P&L | +$77.01 |
+| Win Rate | 60.9% (14/23) |
+| Total Staked | $279 |
 | ROI | +27.6% |
 
 ---
@@ -97,6 +97,24 @@ The ensemble runs warm/cool vs reality depending on the city. These corrections 
 | MIA | −2.2°F cool | 4-day Miami Intl analysis |
 | CHI | +1.4°F warm | Assumed NYC-equivalent (limited data) |
 | LAX | +1.4°F warm | Assumed NYC-equivalent (limited data) |
+
+---
+
+## Key Learnings
+
+### NWS as a tiebreaker
+When the ensemble disagrees with market pricing, the **National Weather Service forecast** (`api.weather.gov`) is a powerful tiebreaker. NWS human forecasters often catch local effects the ensemble misses. If the ensemble says one thing and NWS says another, weight NWS heavily for single-day forecasts.
+
+### MEAN_BUFFER: stay away from the middle
+Bracket markets near the ensemble mean are high-variance bets — the model has genuine uncertainty there. The bot uses a **3°F buffer** around the ensemble mean: NO signals within 3°F of the corrected mean are flagged with a warning and should be traded conservatively or skipped.
+
+### International markets (Tokyo, Singapore)
+Polymarket has temperature markets for Asian cities using **single-degree Celsius brackets**. The bot can analyze these with ad-hoc scripts but lacks built-in Celsius support and bias calibration. Early observations:
+- **Tokyo** (RJTT): ensemble appears to run slightly cool vs actual
+- **Singapore** (WSSS): consistent underforecast similar to Miami's cool bias pattern — early signal is the ensemble undershoots by ~1.5°C
+
+### Staking discipline
+Sizing matters more than win rate. The two biggest wins (Chicago May 21: +$35.76, Miami May 17: +$24.52) came from higher-conviction plays with appropriate size. Minimum-stake trades ($1-2) are fine for data collection and international exploration.
 
 ---
 
