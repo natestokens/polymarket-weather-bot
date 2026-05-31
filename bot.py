@@ -24,6 +24,7 @@ LOG_FILE = Path(__file__).parent / "signals.csv"
 LOG_FIELDS = [
     "date", "bracket", "bracket_lo", "bracket_hi",
     "market_price", "model_prob", "edge", "direction", "trade_size",
+    "ensemble_mean", "adj_mean", "nws_forecast",
     "logged_at", "actual_high", "pnl", "result",
 ]
 
@@ -57,17 +58,20 @@ MEAN_BUFFER = 3.0
 # Positive  = ensemble runs WARM  → we subtract to get the "real" expectation.
 # Negative  = ensemble runs COOL  → we subtract a negative (i.e. we add).
 #
-# NYC  +1.4°F: 29-day LGA analysis (Apr 17 – May 15), warm 76% of days.
-# MIA  -2.2°F: 4-day MIA analysis (May 20–23), ensemble consistently under-shot by ~2.2°F.
-# CHI  +1.4°F: assumed same as NYC until Chicago-specific data is available.
-# LAX  +1.4°F: assumed same as NYC until LAX-specific data is available.
+# RULE: only apply a bias correction once we have 5+ verified results for that city.
+#       Assumed corrections are risky — ensemble bias varies by city and season.
+#
+# NYC  +1.4°F: 29-day LGA analysis (Apr 17 – May 15), warm 76% of days.  [13 results ✓]
+# MIA  -2.2°F: calibrated May 17–28, ensemble consistently under-shot.    [ 5 results ✓]
+# CHI   0.0°F: 3 results only — correction withheld until 5 verified.
+# LAX   0.0°F: 0 results — correction withheld until 5 verified.
 CITY_BIAS = {
     "NYC": 1.4,
     "MIA": -2.2,
-    "CHI": 1.4,
-    "LAX": 1.4,
+    "CHI": 0.0,
+    "LAX": 0.0,
 }
-MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 1.4)
+MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
 # Per-city geographic config — coords drive the Open-Meteo ensemble fetch.
 # Slug is the city token in Polymarket event URLs.
@@ -279,6 +283,152 @@ def execute_trade(slug: str, outcome: str, amount: int) -> None:
     if result.returncode != 0:
         print(f"  [ERROR] Trade command exited with code {result.returncode}")
 
+# ── Forecast cross-check (NWS + wttr.in) ─────────────────────────────────────
+
+def fetch_forecast_crosscheck(target: date) -> dict:
+    """
+    Pull two secondary forecast sources and return their predicted highs (°F).
+    Resolution source for Polymarket temp markets is Weather Underground (KORD/etc),
+    which often diverges from NWS. wttr.in uses commercial models closer to that source.
+
+    Returns dict with keys:
+      nws_high   : int or None  — NWS daily high forecast (°F)
+      wttr_high  : int or None  — wttr.in commercial forecast high (°F)
+      errors     : list[str]
+    """
+    result: dict = {"nws_high": None, "wttr_high": None, "errors": []}
+
+    # 1. NWS daily forecast ---------------------------------------------------
+    try:
+        lat, lon = LATITUDE, LONGITUDE
+        points_url = f"https://api.weather.gov/points/{lat},{lon}"
+        req = urllib.request.Request(points_url, headers={"User-Agent": "weather-bot/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            pts = json.loads(r.read())
+        forecast_url = pts["properties"]["forecast"]
+        req2 = urllib.request.Request(forecast_url, headers={"User-Agent": "weather-bot/1.0"})
+        with urllib.request.urlopen(req2, timeout=10) as r:
+            fc = json.loads(r.read())
+        target_str = target.strftime("%Y-%m-%d")
+        for period in fc["properties"]["periods"]:
+            # Daytime period on the target date
+            if period["startTime"][:10] == target_str and period.get("isDaytime", True):
+                result["nws_high"] = period["temperature"]
+                break
+        # Fallback: first period that starts on target date
+        if result["nws_high"] is None:
+            for period in fc["properties"]["periods"]:
+                if period["startTime"][:10] == target_str:
+                    result["nws_high"] = period["temperature"]
+                    break
+    except Exception as e:
+        result["errors"].append(f"NWS: {e}")
+
+    # 2. wttr.in commercial forecast ------------------------------------------
+    # Uses lat/lon for precision; returns The Weather Company data (same family as
+    # Weather Underground which is Polymarket's resolution source).
+    try:
+        url = f"http://wttr.in/{LATITUDE},{LONGITUDE}?format=j1"
+        req = urllib.request.Request(url, headers={"User-Agent": "weather-bot/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            wdata = json.loads(r.read())
+        today_offset = (target - date.today()).days
+        weather_days = wdata.get("weather", [])
+        if 0 <= today_offset < len(weather_days):
+            result["wttr_high"] = int(weather_days[today_offset]["maxtempF"])
+    except Exception as e:
+        result["errors"].append(f"wttr.in: {e}")
+
+    return result
+
+
+def _print_crosscheck(real: float, cc: dict) -> None:
+    """Print a formatted cross-check summary and flag source disagreement."""
+    nws  = cc.get("nws_high")
+    wttr = cc.get("wttr_high")
+
+    sources = {"Ensemble (adj)": real}
+    if nws  is not None: sources["NWS daily"]     = float(nws)
+    if wttr is not None: sources["wttr.in (WU~)"] = float(wttr)
+
+    print("  Forecast cross-check:")
+    for label, val in sources.items():
+        delta = val - real
+        arrow = f"  ↑ {delta:+.1f}°F vs ensemble" if abs(delta) > 1 else "  ✓ near ensemble"
+        print(f"    {label:<18} {val:.1f}°F{arrow}")
+
+    vals = list(sources.values())
+    span = max(vals) - min(vals)
+    if span >= 8:
+        print(f"  ⚠️  WIDE SPREAD ({span:.0f}°F across sources) — high uncertainty, consider half-size")
+    elif span >= 4:
+        print(f"  ⚠️  Moderate spread ({span:.0f}°F) — sources disagree, trade conservatively")
+    else:
+        print(f"  ✅  Sources aligned (span {span:.1f}°F)")
+
+    # Note that wttr.in is the closest proxy to WU (Polymarket's resolution source)
+    if wttr is not None and nws is not None:
+        if abs(wttr - nws) >= 5:
+            print(f"  📌  wttr.in vs NWS gap: {abs(wttr-nws):.0f}°F — "
+                  f"wttr.in tracks closer to Wunderground (resolution source)")
+    print()
+
+
+# ── Market window check ───────────────────────────────────────────────────────
+
+# Approximate UTC offsets per timezone (DST-aware for common periods).
+# Update if cities shift DST — these cover Northern Hemisphere summer / Southern Hemisphere autumn.
+_TZ_UTC_OFFSET = {
+    "America/New_York":    -4,   # EDT (Mar–Nov)
+    "America/Chicago":     -5,   # CDT (Mar–Nov)
+    "America/Los_Angeles": -7,   # PDT (Mar–Nov)
+    "Asia/Tokyo":           9,
+    "Asia/Singapore":       8,
+    "Asia/Hong_Kong":       8,
+    "Asia/Seoul":           9,
+    "Asia/Shanghai":        8,
+}
+
+SYDNEY_UTC_OFFSET = 11   # AEDT (Oct–Apr) / change to 10 for AEST (Apr–Oct)
+
+def check_market_window(target: date) -> bool:
+    """
+    Print when this market resolves in Sydney time and how many hours away that is.
+    Returns True if within the 24-hour trading window, False (with a warning) if not.
+    Markets are analysed only on the day they close — this check enforces that rule.
+    """
+    from datetime import timezone as _tz, timedelta as _td
+    city_offset   = _TZ_UTC_OFFSET.get(TIMEZONE, 0)
+    # Resolution ≈ midnight at end of target date in the city's local time
+    resolution_utc = (
+        datetime(target.year, target.month, target.day, tzinfo=_tz.utc)
+        + _td(days=1)
+        - _td(hours=city_offset)
+    )
+    now_utc       = datetime.now(_tz.utc)
+    hours_until   = (resolution_utc - now_utc).total_seconds() / 3600
+    res_sydney    = resolution_utc + _td(hours=SYDNEY_UTC_OFFSET)
+
+    if hours_until < 0:
+        label = f"⚠️  ALREADY RESOLVED ({abs(hours_until):.0f}h ago)"
+        ok = False
+    elif hours_until <= 24:
+        label = f"✅  within 24h window"
+        ok = True
+    else:
+        label = f"⛔  {hours_until:.0f}h away — OUTSIDE 24h window"
+        ok = False
+
+    print(f"  Market closes: {res_sydney.strftime('%a %b %-d %-I:%M %p')} Sydney time  "
+          f"({hours_until:.0f}h from now)  {label}")
+    if not ok and hours_until > 0:
+        print(f"  !! Wait until this market is within 24h before analysing.")
+        print(f"  !! In Sydney that means running the bot after: "
+              f"{(res_sydney - _td(hours=24)).strftime('%a %b %-d %-I:%M %p')}")
+    print()
+    return ok
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False) -> None:
@@ -286,6 +436,14 @@ def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False
     print(f"\n{'═' * W}")
     print(f"  Weather Bot — {CITY} — {target.strftime('%A %B %-d, %Y')}")
     print(f"{'═' * W}\n")
+
+    within_window = check_market_window(target)
+    if not within_window:
+        ans = input("  Continue anyway? (y/N): ").strip().lower()
+        if ans != "y":
+            print("  Skipping — run again when the market is within 24h.\n")
+            return
+        print()
 
     print("Fetching ensemble forecasts from Open-Meteo...")
     highs = fetch_ensemble(target)
@@ -295,6 +453,13 @@ def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False
     bias_dir = "warm" if MODEL_WARM_BIAS > 0 else "cool"
     bias_abs = abs(MODEL_WARM_BIAS)
     print(f"  REAL ≈ {real:.1f}°F  (bias-corrected: {MODEL_WARM_BIAS:+.1f}°F {bias_dir} bias [{CITY}])\n")
+
+    print("Fetching secondary forecasts (NWS + wttr.in)...")
+    cc = fetch_forecast_crosscheck(target)
+    if cc["errors"]:
+        for e in cc["errors"]:
+            print(f"  [WARN] {e}")
+    _print_crosscheck(real, cc)
 
     print("Fetching Polymarket prices...")
     poly_data = fetch_polymarket(target)
@@ -415,14 +580,23 @@ def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False
 
     # ── Log signals ───────────────────────────────────────────────────────────
     if do_log and signals:
-        n = log_signals(target, signals, brackets, market_prices, model_probs_map, trade_size)
-        print(f"\n  Logged {n} signal(s) to {LOG_FILE.name}")
+        print(f"\n  NWS forecast for {CITY} on {target} (°F, press Enter to skip): ", end="")
+        try:
+            nws_input = input().strip()
+            nws_val = nws_input if nws_input else ""
+        except (EOFError, KeyboardInterrupt):
+            nws_val = ""
+        n = log_signals(target, signals, brackets, market_prices, model_probs_map, trade_size,
+                        ensemble_mean=mean, adj_mean=real, nws_forecast=nws_val)
+        print(f"  Logged {n} signal(s) to {LOG_FILE.name}")
 
 
 # ── Signal logger ─────────────────────────────────────────────────────────────
 
 def log_signals(target: date, signals: list, brackets: list, market_prices: dict,
-                model_probs_map: dict, trade_size: int) -> int:
+                model_probs_map: dict, trade_size: int,
+                ensemble_mean: float = 0.0, adj_mean: float = 0.0,
+                nws_forecast: str = "") -> int:
     """Append signals to signals.csv. Returns number of rows written."""
     bracket_bounds = {label: (lo, hi) for label, lo, hi in brackets}
     write_header = not LOG_FILE.exists()
@@ -435,19 +609,22 @@ def log_signals(target: date, signals: list, brackets: list, market_prices: dict
         for label, edge, direction, *_ in signals:
             lo, hi = bracket_bounds.get(label, (math.nan, math.nan))
             writer.writerow({
-                "date":        target.isoformat(),
-                "bracket":     label,
-                "bracket_lo":  "-inf" if lo == -math.inf else str(lo),
-                "bracket_hi":  "inf"  if hi ==  math.inf else str(hi),
-                "market_price": f"{market_prices.get(label, 0):.4f}",
-                "model_prob":   f"{model_probs_map.get(label, 0):.4f}",
-                "edge":         f"{edge:.2f}",
-                "direction":    direction,
-                "trade_size":   trade_size,
-                "logged_at":    datetime.now().strftime("%Y-%m-%d %H:%M"),
-                "actual_high":  "",
-                "pnl":          "",
-                "result":       "",
+                "date":          target.isoformat(),
+                "bracket":       label,
+                "bracket_lo":    "-inf" if lo == -math.inf else str(lo),
+                "bracket_hi":    "inf"  if hi ==  math.inf else str(hi),
+                "market_price":  f"{market_prices.get(label, 0):.4f}",
+                "model_prob":    f"{model_probs_map.get(label, 0):.4f}",
+                "edge":          f"{edge:.2f}",
+                "direction":     direction,
+                "trade_size":    trade_size,
+                "ensemble_mean": f"{ensemble_mean:.1f}",
+                "adj_mean":      f"{adj_mean:.1f}",
+                "nws_forecast":  nws_forecast,
+                "logged_at":     datetime.now().strftime("%Y-%m-%d %H:%M"),
+                "actual_high":   "",
+                "pnl":           "",
+                "result":        "",
             })
             rows_written += 1
     return rows_written
@@ -1090,7 +1267,7 @@ if __name__ == "__main__":
         LATITUDE        = lat
         LONGITUDE       = lon
         TIMEZONE        = tz
-        MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 1.4)
+        MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
     if do_history:
         out = generate_history_html()
