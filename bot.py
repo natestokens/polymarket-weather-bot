@@ -28,6 +28,42 @@ LOG_FIELDS = [
     "logged_at", "actual_high", "pnl", "result",
 ]
 
+# Market-favourite tracking: one row per date+city recording the single
+# highest-priced bracket (the market's pick) so we can measure how often the
+# crowd's favourite actually resolves. Answers "is betting against the
+# favourite sound, or does the market see something we don't?"
+FAV_FILE = Path(__file__).parent / "favorites.csv"
+FAV_FIELDS = [
+    "date", "city", "fav_bracket", "fav_lo", "fav_hi",
+    "fav_prob", "actual_high", "fav_hit",
+]
+
+# Ensemble forecast dataset: one row per (date, city) — EVERY day the bot
+# evaluates a city, not just days we traded. Captures what the ensemble
+# predicted vs what actually resolved, so per-city bias can be calibrated off
+# the full record. `error` = actual − adj_mean (positive = we ran cool /
+# under-forecast). `source` = "recorded" (the live trade-time mean) vs
+# "reconstructed" (refetched after the fact via past_days — approximates the
+# analysis, NOT the lead-time forecast, so its error understates true bias).
+FORECAST_FILE = Path(__file__).parent / "forecasts.csv"
+FORECAST_FIELDS = [
+    "date", "city", "unit", "ensemble_mean", "adj_mean", "n_members",
+    "range_lo", "range_hi", "nws_high", "wttr_high",
+    "market_fav", "fav_prob", "actual_high", "error", "source", "logged_at",
+]
+
+# Coordinates for every city we log — superset of CITY_COORDS, adding the Asian
+# single-degree °C markets (Tokyo, Singapore) that resolve outside the main US
+# pipeline. Tuple: (lat, lon, timezone, open-meteo temperature_unit).
+FORECAST_COORDS = {
+    "NYC": (40.7128, -74.0060, "America/New_York",    "fahrenheit"),
+    "MIA": (25.7617, -80.1918, "America/New_York",    "fahrenheit"),
+    "CHI": (41.8827, -87.6233, "America/Chicago",     "fahrenheit"),
+    "LAX": (33.9425, -118.408, "America/Los_Angeles", "fahrenheit"),
+    "TYO": (35.6762, 139.6503, "Asia/Tokyo",          "celsius"),
+    "SIN": (1.3521,  103.8198, "Asia/Singapore",      "celsius"),
+}
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 CITY        = "NYC"
@@ -479,6 +515,18 @@ def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False
 
     model_probs_map = bracket_probs(highs, brackets)
 
+    # ── Market favourite ──────────────────────────────────────────────────────
+    if market_prices:
+        fav_label = max(market_prices, key=lambda k: market_prices[k])
+        fav_prob  = market_prices[fav_label] * 100
+        fav_model = model_probs_map.get(fav_label, 0.0) * 100
+        print(f"  Market favourite: {fav_label} @ {fav_prob:.0f}%  "
+              f"(our model: {fav_model:.0f}%)  — see track record with `--favreport`\n")
+
+    # ── Log the ensemble forecast (every evaluated day, trade or not) ─────────
+    if do_log:
+        log_forecast(target, CITY, mean, real, highs, cc, market_prices)
+
     # ── Print table ───────────────────────────────────────────────────────────
     print(f"{'─' * W}")
     print(f"  {'Bracket':<12} {'Market':>8} {'Model':>8} {'Edge':>9}  Signal")
@@ -589,6 +637,9 @@ def run(target: date, trade_size: int = DEFAULT_TRADE_SIZE, do_log: bool = False
         n = log_signals(target, signals, brackets, market_prices, model_probs_map, trade_size,
                         ensemble_mean=mean, adj_mean=real, nws_forecast=nws_val)
         print(f"  Logged {n} signal(s) to {LOG_FILE.name}")
+        fav = log_market_favorite(target, market_prices, brackets)
+        if fav:
+            print(f"  Logged market favourite ({fav[0]} @ {fav[1]*100:.0f}%) to {FAV_FILE.name}")
 
 
 # ── Signal logger ─────────────────────────────────────────────────────────────
@@ -628,6 +679,336 @@ def log_signals(target: date, signals: list, brackets: list, market_prices: dict
             })
             rows_written += 1
     return rows_written
+
+# ── Market-favourite tracker ──────────────────────────────────────────────────
+
+def _city_tag(label: str) -> str:
+    """Extract a city tag like '(CHI)' from a bracket label; default 'NYC'."""
+    import re
+    m = re.search(r'\(([A-Z]{2,4})\)', label or "")
+    return m.group(1) if m else "NYC"
+
+def log_market_favorite(target: date, market_prices: dict, brackets: list) -> Optional[tuple]:
+    """Record the single highest-priced bracket (the market favourite) for this
+    date+city. actual_high / fav_hit are left blank — filled at resolution by
+    favorite_report() via a join against signals.csv. Returns (label, prob)."""
+    if not market_prices:
+        return None
+    bounds = {label: (lo, hi) for label, lo, hi in brackets}
+    fav_label = max(market_prices, key=lambda k: market_prices[k])
+    fav_prob  = market_prices[fav_label]
+    lo, hi    = bounds.get(fav_label, (math.nan, math.nan))
+
+    write_header = not FAV_FILE.exists()
+    with open(FAV_FILE, "a", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FAV_FIELDS, extrasaction="ignore")
+        if write_header:
+            w.writeheader()
+        w.writerow({
+            "date":        target.isoformat(),
+            "city":        CITY,
+            "fav_bracket": fav_label,
+            "fav_lo":      "-inf" if lo == -math.inf else str(lo),
+            "fav_hi":      "inf"  if hi ==  math.inf else str(hi),
+            "fav_prob":    f"{fav_prob:.4f}",
+            "actual_high": "",
+            "fav_hit":     "",
+        })
+    return fav_label, fav_prob
+
+def _signals_actuals() -> dict:
+    """Map (date, city) → actual_high from signals.csv, tolerating the older
+    13-column rows that predate the ensemble/adj/nws fields."""
+    actuals: dict = {}
+    if not LOG_FILE.exists():
+        return actuals
+    raw = list(csv.reader(open(LOG_FILE)))
+    for cells in raw[1:]:
+        n = len(cells)
+        if   n == 16: d, label, actual = cells[0], cells[1], cells[13]
+        elif n == 13: d, label, actual = cells[0], cells[1], cells[10]
+        else:         continue
+        try:
+            actuals[(d, _city_tag(label))] = float(actual)
+        except (ValueError, TypeError):
+            continue
+    return actuals
+
+def favorite_report() -> None:
+    """Print how often the market favourite resolved correctly, overall and per
+    city. Pulls actuals from signals.csv so resolved rows update automatically."""
+    if not FAV_FILE.exists():
+        print("No favorites.csv yet — run `python3 bot.py <date> <city> --log` to start tracking.")
+        return
+    favs    = list(csv.DictReader(open(FAV_FILE)))
+    actuals = _signals_actuals()
+
+    print(f"\n  {'Date':<12}{'City':<6}{'Favourite':<22}{'Price':>6} {'Actual':>8}  Result")
+    print(f"  {'-'*62}")
+    by_city: dict = {}
+    overall = [0, 0]  # hits, total
+    for r in sorted(favs, key=lambda x: (x["date"], x["city"])):
+        a = r.get("actual_high") or ""
+        actual = None
+        try:    actual = float(a)
+        except (ValueError, TypeError):
+            actual = actuals.get((r["date"], r["city"]))
+        if actual is None:
+            res = "pending"
+            line_actual = "—"
+        else:
+            lo = -math.inf if r["fav_lo"] in ("-inf", "") else float(r["fav_lo"])
+            hi =  math.inf if r["fav_hi"] in ("inf",  "") else float(r["fav_hi"])
+            hit = lo <= actual <= hi
+            res = "HIT ✓" if hit else "MISS ✗"
+            line_actual = f"{actual:.0f}"
+            overall[1] += 1; overall[0] += 1 if hit else 0
+            c = by_city.setdefault(r["city"], [0, 0])
+            c[1] += 1; c[0] += 1 if hit else 0
+        prob = float(r["fav_prob"]) * 100
+        import re as _re
+        fav_clean = _re.sub(r'\s*\([A-Z]{2,4}\)', '', r["fav_bracket"])
+        print(f"  {r['date']:<12}{r['city']:<6}{fav_clean:<22}{prob:>5.0f}% {line_actual:>8}  {res}")
+    print(f"  {'-'*62}")
+    if overall[1]:
+        print(f"  Overall favourite hit rate: {overall[0]}/{overall[1]} = {overall[0]/overall[1]*100:.0f}%")
+        for city, (h, t) in sorted(by_city.items()):
+            flag = "  ← favourite misses more often than it hits" if t and h/t < 0.5 else ""
+            print(f"    {city:<5} {h}/{t} = {h/t*100:.0f}%{flag}")
+    print(f"\n  Read: a low hit rate means betting NO against the favourite is structurally sound —")
+    print(f"  the crowd's single 2°F pick is wrong more often than right.\n")
+
+# ── Ensemble forecast dataset (prediction → resolution) ───────────────────────
+
+def fetch_highs(lat: float, lon: float, tz_name: str, target: date,
+                unit: str = "fahrenheit") -> list:
+    """Raw (no bias) ensemble daily highs (6am–11pm) for any date.
+    Future dates use forecast_days; past dates use past_days — but a past-date
+    refetch returns ≈analysis values, not the lead-time forecast we traded on."""
+    days_back = (date.today() - target).days
+    tz = tz_name.replace("/", "%2F")
+    window = (f"past_days={min(days_back + 2, 92)}&forecast_days=2"
+              if days_back > 0 else "forecast_days=7")
+    url = (
+        "https://ensemble-api.open-meteo.com/v1/ensemble"
+        f"?latitude={lat}&longitude={lon}"
+        "&hourly=temperature_2m"
+        "&models=ecmwf_ifs025,ecmwf_aifs025,ncep_gefs025,icon_seamless"
+        f"&temperature_unit={unit}"
+        f"&{window}"
+        f"&timezone={tz}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "weather-bot/1.0"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        data = json.loads(r.read())
+    hourly, ts = data["hourly"], target.isoformat()
+    times = hourly["time"]
+    idx = [i for i, t in enumerate(times)
+           if t.startswith(ts) and 6 <= int(t[11:13]) <= 23]
+    if not idx:
+        return []
+    highs = []
+    for key, vals in hourly.items():
+        if not key.startswith("temperature_2m"):
+            continue
+        temps = [vals[i] for i in idx if vals[i] is not None]
+        if temps:
+            highs.append(max(temps))
+    return sorted(highs)
+
+
+def _load_forecasts() -> dict:
+    """(date, city) → row dict from forecasts.csv."""
+    rows: dict = {}
+    if FORECAST_FILE.exists():
+        for r in csv.DictReader(open(FORECAST_FILE)):
+            rows[(r["date"], r["city"])] = r
+    return rows
+
+
+def _save_forecasts(rows: dict) -> None:
+    with open(FORECAST_FILE, "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=FORECAST_FIELDS, extrasaction="ignore")
+        w.writeheader()
+        for k in sorted(rows, key=lambda x: (x[0], x[1])):
+            w.writerow(rows[k])
+
+
+def log_forecast(target: date, city: str, ensemble_mean: float, adj_mean: float,
+                 highs: list, cc: dict, market_prices: dict) -> None:
+    """Append this run's ensemble forecast (actual/error left blank until the
+    market resolves). Skips if a row with a mean already exists for this day."""
+    rows = _load_forecasts()
+    key = (target.isoformat(), city)
+    if rows.get(key, {}).get("ensemble_mean"):
+        return
+    fav_label, fav_prob = "", ""
+    if market_prices:
+        fav_label = max(market_prices, key=lambda k: market_prices[k])
+        fav_prob  = f"{market_prices[fav_label]:.4f}"
+    unit = "°C" if FORECAST_COORDS.get(city, (0, 0, 0, "fahrenheit"))[3] == "celsius" else "°F"
+    rows[key] = {
+        "date": target.isoformat(), "city": city, "unit": unit,
+        "ensemble_mean": f"{ensemble_mean:.1f}", "adj_mean": f"{adj_mean:.1f}",
+        "n_members": str(len(highs)),
+        "range_lo": f"{highs[0]:.0f}" if highs else "",
+        "range_hi": f"{highs[-1]:.0f}" if highs else "",
+        "nws_high":  "" if cc.get("nws_high")  is None else str(cc["nws_high"]),
+        "wttr_high": "" if cc.get("wttr_high") is None else str(cc["wttr_high"]),
+        "market_fav": fav_label, "fav_prob": fav_prob,
+        "actual_high": "", "error": "", "source": "recorded",
+        "logged_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+    }
+    _save_forecasts(rows)
+
+
+def _signals_index() -> dict:
+    """(date, city) → {actual, mean, adj, nws} pulled from signals.csv,
+    tolerating both the 13-column (old) and 16-column (new) row widths."""
+    idx: dict = {}
+    if not LOG_FILE.exists():
+        return idx
+    for cells in list(csv.reader(open(LOG_FILE)))[1:]:
+        n = len(cells)
+        if   n == 16:
+            d, label, mean, adj, nws, actual = (
+                cells[0], cells[1], cells[9], cells[10], cells[11], cells[13])
+        elif n == 13:
+            d, label, mean, adj, nws, actual = (
+                cells[0], cells[1], "", "", "", cells[10])
+        else:
+            continue
+        e = idx.setdefault((d, _city_tag(label)),
+                           {"actual": "", "mean": "", "adj": "", "nws": ""})
+        try:
+            float(actual); e["actual"] = actual
+        except (ValueError, TypeError):
+            pass
+        if mean: e["mean"] = mean
+        if adj:  e["adj"]  = adj
+        if nws:  e["nws"]  = nws
+    return idx
+
+
+def _favorites_index() -> dict:
+    """(date, city) → (fav_bracket, fav_prob) from favorites.csv."""
+    idx: dict = {}
+    if FAV_FILE.exists():
+        for r in csv.DictReader(open(FAV_FILE)):
+            idx[(r["date"], r["city"])] = (r.get("fav_bracket", ""),
+                                           r.get("fav_prob", ""))
+    return idx
+
+
+def rebuild_forecasts(refetch: bool = True) -> None:
+    """Rebuild forecasts.csv from signals.csv + favorites.csv. Uses the recorded
+    trade-time ensemble mean where we have it; otherwise refetches via past_days
+    (flagged 'reconstructed'). Fills actuals + error for every resolved day."""
+    sig  = _signals_index()
+    favs = _favorites_index()
+    rows = _load_forecasts()
+
+    print(f"\n  Rebuilding {FORECAST_FILE.name} from {len(sig)} city-days...\n")
+    for (d, city), info in sorted(sig.items()):
+        tgt      = date.fromisoformat(d)
+        coords   = FORECAST_COORDS.get(city)
+        unit_sym = "°C" if (coords and coords[3] == "celsius") else "°F"
+        bias     = CITY_BIAS.get(city, 0.0)
+        existing = rows.get((d, city), {})
+
+        mean, adj, source = info["mean"], info["adj"], "recorded"
+        n_members = existing.get("n_members", "")
+        rlo, rhi  = existing.get("range_lo", ""), existing.get("range_hi", "")
+
+        if not mean and refetch and coords:
+            lat, lon, tz, unit = coords
+            try:
+                highs = fetch_highs(lat, lon, tz, tgt, unit)
+            except Exception as ex:
+                highs = []
+                print(f"    [WARN] refetch failed {d} {city}: {ex}")
+            if highs:
+                rawm      = sum(highs) / len(highs)
+                mean      = f"{rawm:.1f}"
+                adj       = f"{rawm - bias:.1f}"
+                n_members = str(len(highs))
+                rlo, rhi  = f"{highs[0]:.0f}", f"{highs[-1]:.0f}"
+                source    = "reconstructed"
+                print(f"    {d} {city}: reconstructed mean {mean}{unit_sym}")
+        if mean and not adj:
+            adj = f"{float(mean) - bias:.1f}"
+
+        actual, error = info["actual"], ""
+        if actual and adj:
+            try:
+                error = f"{float(actual) - float(adj):+.1f}"
+            except (ValueError, TypeError):
+                pass
+
+        fav, favp = favs.get((d, city),
+                             (existing.get("market_fav", ""), existing.get("fav_prob", "")))
+        rows[(d, city)] = {
+            "date": d, "city": city, "unit": unit_sym,
+            "ensemble_mean": mean, "adj_mean": adj,
+            "n_members": n_members, "range_lo": rlo, "range_hi": rhi,
+            "nws_high":  info["nws"] or existing.get("nws_high", ""),
+            "wttr_high": existing.get("wttr_high", ""),
+            "market_fav": fav, "fav_prob": favp,
+            "actual_high": actual, "error": error, "source": source,
+            "logged_at": existing.get("logged_at") or datetime.now().strftime("%Y-%m-%d %H:%M"),
+        }
+
+    _save_forecasts(rows)
+    print(f"\n  Wrote {len(rows)} rows → {FORECAST_FILE.name}\n")
+    forecast_report()
+
+
+def forecast_report() -> None:
+    """Print the ensemble prediction-vs-resolution record and the per-city mean
+    forecast error. The bias suggestion is computed from RECORDED rows only —
+    reconstructed rows have near-zero error by construction and would mask it."""
+    if not FORECAST_FILE.exists():
+        print("No forecasts.csv yet — run `python3 bot.py --backfill`.")
+        return
+    rows = list(csv.DictReader(open(FORECAST_FILE)))
+
+    print(f"\n  {'Date':<12}{'City':<6}{'Mean':>7}{'Adj':>7}{'Actual':>8}{'Err':>7}  Source")
+    print(f"  {'-'*60}")
+    rec_err: dict = {}   # recorded-only errors, per city → [floats]
+    all_err: dict = {}   # every resolved row, per city
+    for r in sorted(rows, key=lambda x: (x["city"], x["date"])):
+        err = r.get("error", "")
+        mean   = f"{r['ensemble_mean']}{r['unit']}" if r["ensemble_mean"] else "—"
+        adj    = f"{r['adj_mean']}{r['unit']}"      if r["adj_mean"]      else "—"
+        actual = f"{r['actual_high']}{r['unit']}"   if r["actual_high"]   else "—"
+        tag    = (r.get("source") or "")[:13]
+        print(f"  {r['date']:<12}{r['city']:<6}{mean:>7}{adj:>7}{actual:>8}{err:>7}  {tag}")
+        if err:
+            try:
+                e = float(err)
+                all_err.setdefault(r["city"], []).append(e)
+                if r.get("source") == "recorded":
+                    rec_err.setdefault(r["city"], []).append(e)
+            except ValueError:
+                pass
+    print(f"  {'-'*60}")
+
+    print(f"\n  Per-city forecast error  (actual − adj_mean; + = ensemble ran COOL):")
+    for city in sorted(all_err):
+        ae = all_err[city]
+        re = rec_err.get(city, [])
+        amean = sum(ae) / len(ae)
+        line = f"    {city:<5} all: {amean:+.1f} (n={len(ae)})"
+        if re:
+            rmean = sum(re) / len(re)
+            suggest = CITY_BIAS.get(city, 0.0) - rmean
+            line += (f"   recorded: {rmean:+.1f} (n={len(re)})"
+                     f"  → suggested CITY_BIAS {suggest:+.1f}"
+                     f" (now {CITY_BIAS.get(city, 0.0):+.1f})")
+        print(line)
+    print(f"\n  Note: 'reconstructed' rows are refetched after the fact and ≈ the analysis,")
+    print(f"  so their error understates real lead-time bias. Trust 'recorded' rows for")
+    print(f"  calibration; reconstructed rows anchor actuals + market favourites only.\n")
 
 # ── HTML dashboard ────────────────────────────────────────────────────────────
 
@@ -1235,10 +1616,27 @@ def generate_history_html(out_path: str = "history.html") -> str:
 if __name__ == "__main__":
     args = sys.argv[1:]
     size    = DEFAULT_TRADE_SIZE
-    do_html    = "--html"    in args
-    do_log     = "--log"     in args
-    do_history = "--history" in args
-    args = [a for a in args if a not in ("--html", "--log", "--history")]
+    do_html           = "--html"           in args
+    do_log            = "--log"            in args
+    do_history        = "--history"        in args
+    do_favreport      = "--favreport"      in args
+    do_backfill       = "--backfill"       in args
+    do_forecastreport = "--forecastreport" in args
+    args = [a for a in args if a not in (
+        "--html", "--log", "--history", "--favreport",
+        "--backfill", "--forecastreport")]
+
+    if do_favreport:
+        favorite_report()
+        sys.exit(0)
+
+    if do_backfill:
+        rebuild_forecasts()
+        sys.exit(0)
+
+    if do_forecastreport:
+        forecast_report()
+        sys.exit(0)
 
     # Optional --size flag
     if "--size" in args:
