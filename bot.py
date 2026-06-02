@@ -194,16 +194,19 @@ def bracket_probs(highs: list, brackets: list) -> dict:
 
 # ── Step 3: Fetch Polymarket data ─────────────────────────────────────────────
 
-def fetch_polymarket(target: date) -> Optional[Tuple[dict, dict]]:
+def fetch_polymarket(target: date, city_slug: Optional[str] = None) -> Optional[Tuple[dict, dict]]:
     """
     Return (prices, slugs) where both are {outcome_label: value}, or None on failure.
     prices: {label: probability 0-1}
     slugs:  {label: market_slug}
+    city_slug overrides the Polymarket city token (defaults to the active CITY) —
+    used by the --track sweep to fetch tokyo/singapore without touching globals.
     """
     day   = target.strftime("%-d")
     month = target.strftime("%B").lower()
     year  = target.strftime("%Y")
-    city_slug  = CITY_COORDS.get(CITY, CITY_COORDS["NYC"])[3]
+    if city_slug is None:
+        city_slug = CITY_COORDS.get(CITY, CITY_COORDS["NYC"])[3]
     event_slug = f"highest-temperature-in-{city_slug}-on-{month}-{day}-{year}"
     url = f"https://gamma-api.polymarket.com/events?slug={event_slug}"
 
@@ -835,12 +838,14 @@ def _save_forecasts(rows: dict) -> None:
 
 
 def log_forecast(target: date, city: str, ensemble_mean: float, adj_mean: float,
-                 highs: list, cc: dict, market_prices: dict) -> None:
-    """Append this run's ensemble forecast (actual/error left blank until the
-    market resolves). Skips if a row with a mean already exists for this day."""
+                 highs: list, cc: dict, market_prices: dict, force: bool = False) -> None:
+    """Append/update this run's ensemble forecast. By default skips if a mean is
+    already logged for this day; force=True overwrites the forecast fields (used
+    by the daily --track sweep) while preserving any resolution already filled in."""
     rows = _load_forecasts()
-    key = (target.isoformat(), city)
-    if rows.get(key, {}).get("ensemble_mean"):
+    key  = (target.isoformat(), city)
+    existing = rows.get(key, {})
+    if existing.get("ensemble_mean") and not force:
         return
     fav_label, fav_prob = "", ""
     if market_prices:
@@ -856,7 +861,10 @@ def log_forecast(target: date, city: str, ensemble_mean: float, adj_mean: float,
         "nws_high":  "" if cc.get("nws_high")  is None else str(cc["nws_high"]),
         "wttr_high": "" if cc.get("wttr_high") is None else str(cc["wttr_high"]),
         "market_fav": fav_label, "fav_prob": fav_prob,
-        "actual_high": "", "error": "", "source": "recorded",
+        # Preserve a resolution that was already filled in by --backfill/--resolve.
+        "actual_high": existing.get("actual_high", ""),
+        "error":       existing.get("error", ""),
+        "source": "recorded",
         "logged_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
     }
     _save_forecasts(rows)
@@ -1009,6 +1017,207 @@ def forecast_report() -> None:
     print(f"\n  Note: 'reconstructed' rows are refetched after the fact and ≈ the analysis,")
     print(f"  so their error understates real lead-time bias. Trust 'recorded' rows for")
     print(f"  calibration; reconstructed rows anchor actuals + market favourites only.\n")
+
+# ── Daily tracking sweep ──────────────────────────────────────────────────────
+
+# Cities swept by --track. US markets are 2°F (°F); the Asian markets (TYO/SIN)
+# are single-degree °C — both handled via the unit-aware fetch_highs pipeline.
+TRACK_CITIES = ["NYC", "MIA", "CHI", "LAX", "TYO", "SIN"]
+
+# Polymarket city token per city (the {city} slot in the event slug).
+POLY_SLUG = {
+    "NYC": "nyc",   "MIA": "miami",     "CHI": "chicago", "LAX": "los-angeles",
+    "TYO": "tokyo", "SIN": "singapore",
+}
+
+def track_all(target: date) -> None:
+    """Non-interactive sweep: log the current ensemble forecast for every tracked
+    city to forecasts.csv, in each market's native unit (°F US / °C Asia). No
+    trades, no prompts — safe to schedule. Resolutions filled later by --resolve."""
+    global LATITUDE, LONGITUDE
+    print(f"\n  Tracking {len(TRACK_CITIES)} markets for {target.strftime('%A %b %-d, %Y')}...\n")
+    logged = 0
+    for city in TRACK_CITIES:
+        lat, lon, tz, unit = FORECAST_COORDS[city]
+        bias = CITY_BIAS.get(city, 0.0)
+        try:
+            highs = fetch_highs(lat, lon, tz, target, unit)
+        except Exception as ex:
+            print(f"    {city:<4} ensemble fetch failed: {ex}")
+            continue
+        if not highs:
+            print(f"    {city:<4} no ensemble data for {target}")
+            continue
+        mean = sum(highs) / len(highs)
+        real = mean - bias
+        poly = fetch_polymarket(target, city_slug=POLY_SLUG.get(city))
+        market_prices = poly[0] if poly else {}
+        # NWS + wttr cross-check is US-only (NWS has no Asian stations).
+        if unit == "fahrenheit":
+            LATITUDE, LONGITUDE = lat, lon
+            cc = fetch_forecast_crosscheck(target)
+        else:
+            cc = {"nws_high": None, "wttr_high": None}
+        log_forecast(target, city, mean, real, highs, cc, market_prices, force=True)
+        logged += 1
+        u   = "°C" if unit == "celsius" else "°F"
+        fav = (max(market_prices, key=lambda k: market_prices[k])
+               if market_prices else "no live market")
+        print(f"    {city:<4} mean {mean:.1f}{u} → real {real:.1f}{u}   fav: {fav}")
+    print(f"\n  Logged {logged} city-day(s) → {FORECAST_FILE.name}\n")
+
+# ── Resolution (auto-fill actuals) ────────────────────────────────────────────
+
+# NWS station each US market resolves against (observed daily high). The Asian
+# °C markets have no NWS station — they stay manual until a source is wired in.
+RESOLVE_STATION = {
+    "NYC": "KLGA",   # LaGuardia
+    "MIA": "KMIA",   # Miami Intl
+    "CHI": "KORD",   # O'Hare
+    "LAX": "KLAX",   # LA Intl
+}
+
+def fetch_observed_high(station: str, target: date, tz_name: str) -> Optional[float]:
+    """Observed daily high (°F) for a US station over the target's LOCAL calendar
+    day, from NWS station observations (METAR). Returns None if no obs found."""
+    from datetime import timezone as _tz, timedelta as _td
+    offset    = _TZ_UTC_OFFSET.get(tz_name, 0)
+    start_utc = datetime(target.year, target.month, target.day, tzinfo=_tz.utc) - _td(hours=offset)
+    end_utc   = start_utc + _td(hours=24)
+    url = (
+        f"https://api.weather.gov/stations/{station}/observations"
+        f"?start={start_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+        f"&end={end_utc.strftime('%Y-%m-%dT%H:%M:%SZ')}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "weather-bot/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read())
+    temps_c = [
+        feat["properties"]["temperature"]["value"]
+        for feat in data.get("features", [])
+        if feat.get("properties", {}).get("temperature", {}).get("value") is not None
+    ]
+    if not temps_c:
+        return None
+    return float(round(max(temps_c) * 9 / 5 + 32))
+
+
+def fetch_observed_high_intl(lat: float, lon: float, tz_name: str, target: date,
+                             unit: str = "celsius") -> Optional[float]:
+    """Observed daily high for a non-US location via Open-Meteo's daily max
+    (gridded, ~station proxy). Used for Tokyo/Singapore — no NWS station exists.
+    Less exact than a station METAR; flagged 'open-meteo' so it's distinguishable."""
+    days_back = (date.today() - target).days
+    tz = tz_name.replace("/", "%2F")
+    window = (f"past_days={min(days_back + 2, 92)}&forecast_days=1"
+              if days_back > 0 else "forecast_days=1")
+    url = (
+        "https://api.open-meteo.com/v1/forecast"
+        f"?latitude={lat}&longitude={lon}"
+        "&daily=temperature_2m_max"
+        f"&temperature_unit={unit}"
+        f"&{window}"
+        f"&timezone={tz}"
+    )
+    req = urllib.request.Request(url, headers={"User-Agent": "weather-bot/1.0"})
+    with urllib.request.urlopen(req, timeout=20) as r:
+        data = json.loads(r.read())
+    daily = data.get("daily", {})
+    ts    = target.isoformat()
+    for t, v in zip(daily.get("time", []), daily.get("temperature_2m_max", [])):
+        if t == ts and v is not None:
+            return float(round(v))
+    return None
+
+
+def resolve_forecasts() -> None:
+    """Fill actual_high + error for every settled (past-dated) forecasts.csv row
+    that's still missing a resolution, using NWS station observations."""
+    rows = _load_forecasts()
+    pending = [
+        (k, r) for k, r in rows.items()
+        if not r.get("actual_high") and date.fromisoformat(r["date"]) < date.today()
+    ]
+    if not pending:
+        print("\n  No pending resolutions — every settled day already has an actual.\n")
+        return
+
+    print(f"\n  Resolving {len(pending)} settled city-day(s)...\n")
+    filled, skipped = 0, 0
+    for (d, city), r in sorted(pending):
+        coords = FORECAST_COORDS.get(city)
+        if not coords:
+            print(f"    {d} {city}: unknown city — fill manually")
+            skipped += 1
+            continue
+        lat, lon, tz, unit = coords
+        u = "°C" if unit == "celsius" else "°F"
+        station = RESOLVE_STATION.get(city)
+
+        # International markets have no NWS station, and the Open-Meteo grid
+        # disagrees with the JMA/station source Polymarket settles on (~2°C off on
+        # Tokyo — enough to flip a single-degree market). So we only HINT and leave
+        # the value for manual --set-actual; never auto-write an unreliable actual.
+        if not station:
+            try:
+                est = fetch_observed_high_intl(lat, lon, tz, date.fromisoformat(d), unit)
+            except Exception:
+                est = None
+            hint = f"  (Open-Meteo est ~{est:.0f}{u}, verify on Polymarket)" if est is not None else ""
+            print(f"    {d} {city}: manual →  python3 bot.py --set-actual {d} {city} <value>{hint}")
+            skipped += 1
+            continue
+
+        try:
+            hi = fetch_observed_high(station, date.fromisoformat(d), tz)
+        except Exception as ex:
+            print(f"    {d} {city}: obs fetch failed: {ex}")
+            skipped += 1
+            continue
+        if hi is None:
+            print(f"    {d} {city}: no observations returned ({station})")
+            skipped += 1
+            continue
+        r["actual_high"] = f"{hi:.1f}"
+        adj = r.get("adj_mean", "")
+        if adj:
+            try:
+                r["error"] = f"{hi - float(adj):+.1f}"
+            except (ValueError, TypeError):
+                pass
+        filled += 1
+        print(f"    {d} {city}: actual {hi:.0f}{u}   err {r.get('error', '—') or '—'}   ({station})")
+
+    _save_forecasts(rows)
+    print(f"\n  Filled {filled} resolution(s)"
+          f"{f', {skipped} manual/skipped' if skipped else ''} → {FORECAST_FILE.name}\n")
+
+
+def set_actual(target_str: str, city: str, value: str) -> None:
+    """Manually set a resolution on a forecasts.csv row (for Tokyo/Singapore,
+    which can't be auto-resolved). Recomputes error from adj_mean."""
+    city = city.upper()
+    rows = _load_forecasts()
+    key  = (target_str, city)
+    if key not in rows:
+        print(f"  No forecasts.csv row for {target_str} {city} — run --track for that day first.")
+        return
+    try:
+        v = float(value)
+    except ValueError:
+        print(f"  '{value}' is not a number.")
+        return
+    r = rows[key]
+    r["actual_high"] = f"{v:.1f}"
+    adj = r.get("adj_mean", "")
+    if adj:
+        try:
+            r["error"] = f"{v - float(adj):+.1f}"
+        except (ValueError, TypeError):
+            pass
+    _save_forecasts(rows)
+    print(f"  Set {city} {target_str} actual = {v:.0f}{r['unit']}   "
+          f"err {r.get('error', '—') or '—'} → {FORECAST_FILE.name}")
 
 # ── HTML dashboard ────────────────────────────────────────────────────────────
 
@@ -1615,6 +1824,16 @@ def generate_history_html(out_path: str = "history.html") -> str:
 
 if __name__ == "__main__":
     args = sys.argv[1:]
+
+    # --set-actual YYYY-MM-DD CITY VALUE — manual resolution for TYO/SIN
+    if "--set-actual" in args:
+        i = args.index("--set-actual")
+        try:
+            set_actual(args[i + 1], args[i + 2], args[i + 3])
+        except IndexError:
+            print("Usage: python3 bot.py --set-actual YYYY-MM-DD CITY VALUE")
+        sys.exit(0)
+
     size    = DEFAULT_TRADE_SIZE
     do_html           = "--html"           in args
     do_log            = "--log"            in args
@@ -1622,9 +1841,11 @@ if __name__ == "__main__":
     do_favreport      = "--favreport"      in args
     do_backfill       = "--backfill"       in args
     do_forecastreport = "--forecastreport" in args
+    do_track          = "--track"          in args
+    do_resolve        = "--resolve"        in args
     args = [a for a in args if a not in (
         "--html", "--log", "--history", "--favreport",
-        "--backfill", "--forecastreport")]
+        "--backfill", "--forecastreport", "--track", "--resolve")]
 
     if do_favreport:
         favorite_report()
@@ -1636,6 +1857,10 @@ if __name__ == "__main__":
 
     if do_forecastreport:
         forecast_report()
+        sys.exit(0)
+
+    if do_resolve:
+        resolve_forecasts()
         sys.exit(0)
 
     # Optional --size flag
@@ -1667,7 +1892,9 @@ if __name__ == "__main__":
         TIMEZONE        = tz
         MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
-    if do_history:
+    if do_track:
+        track_all(target)
+    elif do_history:
         out = generate_history_html()
         print(f"History dashboard written → {os.path.abspath(out)}")
         subprocess.run(["open", out])
