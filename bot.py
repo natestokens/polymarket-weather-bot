@@ -97,15 +97,18 @@ MEAN_BUFFER = 3.0
 # RULE: only apply a bias correction once we have 5+ verified results for that city.
 #       Assumed corrections are risky — ensemble bias varies by city and season.
 #
-# NYC  +1.4°F: 29-day LGA analysis (Apr 17 – May 15), warm 76% of days.  [13 results ✓]
-# MIA  -2.2°F: calibrated May 17–28, ensemble consistently under-shot.    [ 5 results ✓]
-# CHI   0.0°F: 3 results only — correction withheld until 5 verified.
-# LAX   0.0°F: 0 results — correction withheld until 5 verified.
+# NYC  -1.0°F: updated 2026-06-04. Ensemble under-shoots in late May/June.    [ 2 recorded ⚠ low-n]
+#              Prior +1.4 was from Apr–May spring data (13 pts); regime shifted for summer.
+# MIA  -4.8°F: updated 2026-06-04. Ensemble still short after old -2.2 correction. [ 2 recorded ⚠ low-n]
+# CHI  -3.7°F: updated 2026-06-04. Actual consistently ~3.7°F hotter than ensemble. [ 4 recorded ⚠ low-n]
+# LAX  +4.3°F: updated 2026-06-04. Ensemble runs ~4.3°F hot; actual cooler.         [ 2 recorded ⚠ low-n]
+#              NOTE: Polymarket resolves LAX vs a different station than NWS KLAX — actual
+#              spread may be wider. Watch for further correction after more data.
 CITY_BIAS = {
-    "NYC": 1.4,
-    "MIA": -2.2,
-    "CHI": 0.0,
-    "LAX": 0.0,
+    "NYC": -1.0,   # updated 2026-06-04: 2 recorded pts, actual +2.4°F hotter → was +1.4
+    "MIA": -4.8,   # updated 2026-06-04: 2 recorded pts, still +2.6°F short after old -2.2 → was -2.2
+    "CHI": -3.7,   # updated 2026-06-04: 4 recorded pts, actual +3.7°F hotter → was 0.0
+    "LAX":  4.3,   # updated 2026-06-04: 2 recorded pts, actual −4.3°F cooler → was 0.0
 }
 MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
@@ -1553,6 +1556,209 @@ def generate_html(
     return out_path
 
 
+# ── Public dashboard JSON export ──────────────────────────────────────────────
+
+def export_site_json(out_path: str = "site_data.json") -> str:
+    """Build a structured JSON snapshot consumed by the public dashboard (index.html)."""
+    import re as _re
+
+    out = Path(__file__).parent / out_path
+
+    def _f(v):
+        try:
+            return float(v) if (v is not None and str(v).strip() not in ("", "CUT")) else None
+        except (ValueError, TypeError):
+            return None
+
+    # ── Forecasts ─────────────────────────────────────────────────────────────
+    forecasts = []
+    if FORECAST_FILE.exists():
+        for r in csv.DictReader(open(FORECAST_FILE)):
+            forecasts.append({
+                "date":          r["date"],
+                "city":          r["city"],
+                "unit":          r["unit"],
+                "ensemble_mean": _f(r.get("ensemble_mean")),
+                "adj_mean":      _f(r.get("adj_mean")),
+                "n_members":     _f(r.get("n_members")),
+                "range_lo":      _f(r.get("range_lo")),
+                "range_hi":      _f(r.get("range_hi")),
+                "nws_high":      _f(r.get("nws_high")),
+                "wttr_high":     _f(r.get("wttr_high")),
+                "market_fav":    r.get("market_fav") or None,
+                "fav_prob":      _f(r.get("fav_prob")),
+                "actual_high":   _f(r.get("actual_high")),
+                "error":         _f(r.get("error")),
+                "source":        r.get("source") or "recorded",
+                "logged_at":     r.get("logged_at") or "",
+            })
+
+    # ── Signals ───────────────────────────────────────────────────────────────
+    def _bound(s):
+        if s in ("-inf", "inf", "", None):
+            return None
+        try:
+            return float(s)
+        except (ValueError, TypeError):
+            return None
+
+    signals = []
+    if LOG_FILE.exists():
+        for cells in list(csv.reader(open(LOG_FILE)))[1:]:
+            n = len(cells)
+            if n == 16:
+                sig = {
+                    "date": cells[0], "bracket": cells[1],
+                    "bracket_lo": _bound(cells[2]), "bracket_hi": _bound(cells[3]),
+                    "market_price": _f(cells[4]), "model_prob": _f(cells[5]),
+                    "edge": _f(cells[6]), "direction": cells[7],
+                    "trade_size": _f(cells[8]),
+                    "ensemble_mean": _f(cells[9]), "adj_mean": _f(cells[10]),
+                    "nws_forecast": _f(cells[11]),
+                    "logged_at": cells[12],
+                    "actual_high": _f(cells[13]), "pnl": _f(cells[14]),
+                    "result": cells[15] or None,
+                }
+            elif n == 13:
+                sig = {
+                    "date": cells[0], "bracket": cells[1],
+                    "bracket_lo": _bound(cells[2]), "bracket_hi": _bound(cells[3]),
+                    "market_price": _f(cells[4]), "model_prob": _f(cells[5]),
+                    "edge": _f(cells[6]), "direction": cells[7],
+                    "trade_size": _f(cells[8]),
+                    "ensemble_mean": None, "adj_mean": None, "nws_forecast": None,
+                    "logged_at": cells[9],
+                    "actual_high": _f(cells[10]), "pnl": _f(cells[11]),
+                    "result": cells[12] or None,
+                }
+            else:
+                continue
+            m = _re.search(r'\(([A-Z]{2,4})\)', sig["bracket"])
+            sig["city"] = m.group(1) if m else "NYC"
+            signals.append(sig)
+
+    # ── Favorites ─────────────────────────────────────────────────────────────
+    favorites = []
+    if FAV_FILE.exists():
+        actuals = _signals_actuals()
+        for r in csv.DictReader(open(FAV_FILE)):
+            actual_f = _f(r.get("actual_high")) or actuals.get((r["date"], r["city"]))
+            fav_hit_raw = r.get("fav_hit") or ""
+            fav_hit = None
+            if fav_hit_raw in ("1", "true", "True"):
+                fav_hit = True
+            elif fav_hit_raw in ("0", "false", "False"):
+                fav_hit = False
+            elif actual_f is not None:
+                lo_s, hi_s = r.get("fav_lo", ""), r.get("fav_hi", "")
+                lo_f = -math.inf if lo_s == "-inf" else _f(lo_s)
+                hi_f =  math.inf if hi_s ==  "inf" else _f(hi_s)
+                if lo_f is not None and hi_f is not None:
+                    fav_hit = bool(lo_f <= actual_f <= hi_f)
+            favorites.append({
+                "date": r["date"], "city": r["city"],
+                "fav_bracket": r.get("fav_bracket") or None,
+                "fav_lo": None if r.get("fav_lo") == "-inf" else _f(r.get("fav_lo")),
+                "fav_hi": None if r.get("fav_hi") ==  "inf" else _f(r.get("fav_hi")),
+                "fav_prob": _f(r.get("fav_prob")),
+                "actual_high": actual_f,
+                "fav_hit": fav_hit,
+            })
+
+    # ── Summary stats ─────────────────────────────────────────────────────────
+    resolved = [s for s in signals if s.get("result") in ("WIN", "LOSS", "CUT")]
+    wins   = sum(1 for s in resolved if s["result"] == "WIN")
+    losses = sum(1 for s in resolved if s["result"] == "LOSS")
+    cuts   = sum(1 for s in resolved if s["result"] == "CUT")
+    total_pnl = sum(s["pnl"] for s in resolved if s.get("pnl") is not None)
+
+    by_city: dict = {}
+    for s in resolved:
+        c = s["city"]
+        d = by_city.setdefault(c, {"wins": 0, "losses": 0, "cuts": 0, "pnl": 0.0})
+        if s["result"] == "WIN":    d["wins"]   += 1
+        elif s["result"] == "LOSS": d["losses"] += 1
+        else:                       d["cuts"]   += 1
+        if s.get("pnl") is not None:
+            d["pnl"] += s["pnl"]
+    for c, d in by_city.items():
+        t = d["wins"] + d["losses"] + d["cuts"]
+        d["total"]    = t
+        d["win_rate"] = round(d["wins"] / t, 3) if t else 0.0
+        d["pnl"]      = round(d["pnl"], 2)
+
+    summary = {
+        "total_trades": len(resolved),
+        "wins": wins, "losses": losses, "cuts": cuts,
+        "win_rate": round(wins / len(resolved), 3) if resolved else 0.0,
+        "total_pnl": round(total_pnl, 2),
+        "by_city": by_city,
+    }
+
+    # Cumulative P&L series for the chart
+    cumulative = []
+    running = 0.0
+    for s in sorted(resolved, key=lambda x: (x["date"], x["logged_at"])):
+        if s.get("pnl") is not None:
+            running += s["pnl"]
+            cumulative.append({"date": s["date"], "city": s["city"],
+                                "bracket": s["bracket"], "result": s["result"],
+                                "pnl": round(s["pnl"], 2), "cum_pnl": round(running, 2)})
+    summary["cumulative_pnl"] = cumulative
+
+    # ── Calibration ───────────────────────────────────────────────────────────
+    cal_by_city: dict = {}
+    for f in forecasts:
+        c = f["city"]
+        if f.get("actual_high") is None or f.get("adj_mean") is None:
+            continue
+        err = round(f["actual_high"] - f["adj_mean"], 2)
+        row = {"date": f["date"], "adj_mean": f["adj_mean"],
+               "actual_high": f["actual_high"], "error": err,
+               "source": f.get("source", "recorded")}
+        cal_by_city.setdefault(c, {"rows": [], "current_bias": CITY_BIAS.get(c, 0.0)})
+        cal_by_city[c]["rows"].append(row)
+    for c, d in cal_by_city.items():
+        rec = [r for r in d["rows"] if r["source"] == "recorded"]
+        d["n_recorded"]          = len(rec)
+        d["mean_error_recorded"] = round(sum(r["error"] for r in rec) / len(rec), 2) if rec else None
+        d["n_total"]             = len(d["rows"])
+        d["mean_error_all"]      = round(sum(r["error"] for r in d["rows"]) / len(d["rows"]), 2) if d["rows"] else None
+
+    # ── Favourite stats ───────────────────────────────────────────────────────
+    settled = [f for f in favorites if f.get("fav_hit") is not None]
+    fav_hits = sum(1 for f in settled if f["fav_hit"])
+    fav_by_city: dict = {}
+    for f in settled:
+        c = f["city"]
+        d = fav_by_city.setdefault(c, {"hits": 0, "total": 0})
+        d["total"] += 1
+        if f["fav_hit"]:
+            d["hits"] += 1
+
+    fav_stats = {
+        "overall_hits": fav_hits,
+        "overall_total": len(settled),
+        "overall_hit_rate": round(fav_hits / len(settled), 3) if settled else 0.0,
+        "by_city": fav_by_city,
+    }
+
+    payload = {
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "forecasts": forecasts,
+        "signals": signals,
+        "favorites": favorites,
+        "summary": summary,
+        "calibration": {"by_city": cal_by_city},
+        "fav_stats": fav_stats,
+    }
+
+    with open(out, "w") as fh:
+        json.dump(payload, fh, indent=2)
+
+    return str(out)
+
+
 # ── History dashboard ─────────────────────────────────────────────────────────
 
 def generate_history_html(out_path: str = "history.html") -> str:
@@ -1843,9 +2049,16 @@ if __name__ == "__main__":
     do_forecastreport = "--forecastreport" in args
     do_track          = "--track"          in args
     do_resolve        = "--resolve"        in args
+    do_export_json    = "--export-json"    in args
     args = [a for a in args if a not in (
         "--html", "--log", "--history", "--favreport",
-        "--backfill", "--forecastreport", "--track", "--resolve")]
+        "--backfill", "--forecastreport", "--track", "--resolve",
+        "--export-json")]
+
+    if do_export_json:
+        out = export_site_json()
+        print(f"Site data written → {out}")
+        sys.exit(0)
 
     if do_favreport:
         favorite_report()

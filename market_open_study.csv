@@ -1,0 +1,11 @@
+date,city,capture_time,ensemble_adj_mean,market_open_fav,market_open_fav_price,market_now_fav,market_now_fav_price,actual_high,winner_bracket,open_winner_price,ensemble_vs_market,notes
+2026-06-02,NYC,morning,75.1,76-77°F,0.65,76-77°F,1.00,76.0,76-77°F,~0.20,AGREE,winner started at 20% drifted to 100%
+2026-06-02,LAX,morning,72.9,68-69°F,0.54,68-69°F,1.00,69.0,68-69°F,~0.25,DISAGREE,ensemble 4F hot market correct all day
+2026-06-03,NYC,morning,80.5,82-83°F,0.62,82-83°F,0.62,83.0,82-83°F,0.62,DISAGREE,market was right ensemble 3F cool actual 83 market fav won
+2026-06-03,LAX,morning,76.1,70-71°F,0.45,70-71°F,0.45,69.0,68-69°F,~0.10,DISAGREE,ensemble 7F hot actual 69 neither ensemble nor market fav won - both missed low
+2026-06-03,CHI,morning,78.5,74°F or higher,1.00,74°F or higher,1.00,,,,,FLAT,broad bracket skip
+2026-06-03,MIA,morning,83.6,85°F or below,0.97,85°F or below,0.97,,,,,FLAT,broad bracket skip
+2026-06-04,NYC,1day_snapshot,83.7,86-87°F,0.35,86-87°F,0.35,,,,,AGREE,ensemble bracket = market fav both at 35% market stable all day
+2026-06-04,MIA,1day_snapshot,82.6,82-83°F,0.35,82-83°F,0.51,,,,,AGREE,ensemble adj_mean 82.6 in market fav bracket market drifted hotter during day to 51%
+2026-06-05,NYC,1day_snapshot,88.4,90-91°F,0.25,90-91°F,0.35,,,,,DISAGREE,market 2F hotter than ensemble 88-89 opened chaotic settled at 90-91
+2026-06-05,MIA,1day_snapshot,84.8,84-85°F,0.25,82-83°F,0.33,,,,,AGREE,ensemble adj_mean 84.8 near market split 82-83 vs 84-85 opened chaotic
