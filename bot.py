@@ -108,7 +108,8 @@ CITY_BIAS = {
     "NYC": -1.0,   # updated 2026-06-04: 2 recorded pts, actual +2.4°F hotter → was +1.4
     "MIA": -4.8,   # updated 2026-06-04: 2 recorded pts, still +2.6°F short after old -2.2 → was -2.2
     "CHI": -3.7,   # updated 2026-06-04: 4 recorded pts, actual +3.7°F hotter → was 0.0
-    "LAX":  4.3,   # updated 2026-06-04: 2 recorded pts, actual −4.3°F cooler → was 0.0
+    "LAX":  5.5,   # updated 2026-06-05: corrected to Wunderground actuals (METAR-only fix);
+                   # raw ensemble bias = +5.7°F over 3 pts. Conservative at +5.5 → was +4.3
 }
 MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
@@ -1082,7 +1083,14 @@ RESOLVE_STATION = {
 
 def fetch_observed_high(station: str, target: date, tz_name: str) -> Optional[float]:
     """Observed daily high (°F) for a US station over the target's LOCAL calendar
-    day, from NWS station observations (METAR). Returns None if no obs found."""
+    day, from NWS station observations (METAR). Returns None if no obs found.
+
+    IMPORTANT: We filter to hourly METAR observations only (timestamp minute 45–59).
+    Wunderground (Polymarket's resolution source) uses hourly METARs, NOT the
+    5-minute ASOS auto-reports. The 5-min reports round Celsius to whole degrees,
+    which can produce readings 1°F higher than the precise hourly METAR T-group
+    value. Using all observations caused a systematic +1°F overcount vs Wunderground.
+    """
     from datetime import timezone as _tz, timedelta as _td
     offset    = _TZ_UTC_OFFSET.get(tz_name, 0)
     start_utc = datetime(target.year, target.month, target.day, tzinfo=_tz.utc) - _td(hours=offset)
@@ -1095,11 +1103,36 @@ def fetch_observed_high(station: str, target: date, tz_name: str) -> Optional[fl
     req = urllib.request.Request(url, headers={"User-Agent": "weather-bot/1.0"})
     with urllib.request.urlopen(req, timeout=20) as r:
         data = json.loads(r.read())
-    temps_c = [
-        feat["properties"]["temperature"]["value"]
-        for feat in data.get("features", [])
-        if feat.get("properties", {}).get("temperature", {}).get("value") is not None
-    ]
+
+    # Only use the standard hourly METAR observations (issued at :53 past the hour).
+    # Wunderground (Polymarket's resolution source) records hourly METARs only —
+    # NOT the 5-minute ASOS auto-reports that run at :00/:05/…/:50/:55.
+    #
+    # Why this matters: 5-min ASOS reports use rounded whole-degree Celsius from
+    # the standard METAR temperature field. The :53 METAR uses the T-group (tenths
+    # of °C), which is more precise and converts to a slightly different °F value.
+    # Example: ASOS reports 22.0°C → 71.6°F → rounds to 72°F.
+    #          METAR T-group: 21.7°C → 71.1°F → rounds to 71°F.
+    # Using all observations inflated the daily max by ~1°F vs Wunderground.
+    temps_c = []
+    all_temps_c = []  # kept as fallback
+    for feat in data.get("features", []):
+        props = feat.get("properties", {})
+        temp  = props.get("temperature", {}).get("value")
+        ts    = props.get("timestamp", "")   # e.g. "2026-06-04T20:53:00+00:00"
+        if temp is None:
+            continue
+        all_temps_c.append(temp)
+        try:
+            minute = int(ts[14:16])
+        except (ValueError, IndexError):
+            continue
+        if minute == 53:   # standard hourly METAR only
+            temps_c.append(temp)
+
+    # Fallback: if no :53 METARs found (unusual), use all observations
+    if not temps_c:
+        temps_c = all_temps_c
     if not temps_c:
         return None
     return float(round(max(temps_c) * 9 / 5 + 32))
