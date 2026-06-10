@@ -106,10 +106,9 @@ MEAN_BUFFER = 3.0
 #              spread may be wider. Watch for further correction after more data.
 CITY_BIAS = {
     "NYC": -1.0,   # updated 2026-06-04: 2 recorded pts, actual +2.4°F hotter → was +1.4
-    "MIA": -4.8,   # updated 2026-06-04: 2 recorded pts, still +2.6°F short after old -2.2 → was -2.2
+    "MIA": -3.6,   # updated 2026-06-10: 5 recorded pts, over-correcting by 1.2°F → was -4.8
     "CHI": -3.7,   # updated 2026-06-04: 4 recorded pts, actual +3.7°F hotter → was 0.0
-    "LAX":  5.5,   # updated 2026-06-05: corrected to Wunderground actuals (METAR-only fix);
-                   # raw ensemble bias = +5.7°F over 3 pts. Conservative at +5.5 → was +4.3
+    "LAX":  6.5,   # updated 2026-06-10: 5 recorded pts, still under-correcting by 1.3°F → was +5.5
 }
 MODEL_WARM_BIAS = CITY_BIAS.get(CITY, 0.0)
 
